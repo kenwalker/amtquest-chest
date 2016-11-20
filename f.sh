@@ -1,3 +1,3 @@
 particle flash --usb electron_firmware_* 
-sleep 1
+sleep 2
 ./s.sh

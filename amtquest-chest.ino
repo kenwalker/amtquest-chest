@@ -2,6 +2,13 @@
 #include "PowerStatus.h"
 
 // Global variables
+const int BATTERY_LOW_VALUE = 40;
+bool CONNECTED_MESSAGE_SENT = false;
+
+// Rebroadcase every 30 minutes
+const int REBROADCAST_INTERVAL = 1800000;
+
+unsigned long LAST_REBROADCAST_TIME = 0;
 
 const int MAX_LED_BRIGHTNESS = 255;
 const int MIN_LED_BRIGHTNESS = 0;
@@ -9,8 +16,6 @@ const int MIN_LED_BRIGHTNESS = 0;
 // Use the same LED values for any light flashing
 int LED_FADE_AMOUNT = 5;
 int LED_BRIGHTNESS = 0;
-
-// Global flashing LED values
 
 // Battery LED variables
 const int BATTERY_LED_PIN = D0;
@@ -38,16 +43,11 @@ AssetTracker gpsLocation = AssetTracker();
 // We want the ability to run our loop BEFORE connecting to the cloud
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
-Timer batteryLEDTimer(1000, setBatteryStatus);
-Timer cellularLEDTimer(1000, setCellularsStatus);
-Timer locationTimer(1000, setLocationStatus);
-Timer ledFadeTimer(10, setCurrentFadeValue);
-
 // Actively ask for a GPS reading if you're impatient. Only publishes if there's
 // a GPS fix, otherwise returns '0'
 int gpsPublish(String command){
     if(gpsLocation.gpsFix()){
-        Particle.publish("G", gpsLocation.readLatLon(), 60, PRIVATE);
+        Particle.publish("GPS", locationString(), 60, PRIVATE);
 
         // uncomment next line if you want a manual publish to reset delay counter
         // lastPublish = millis();
@@ -55,6 +55,62 @@ int gpsPublish(String command){
     }
     else { return 0; }
 }
+
+// Lets you remotely check the battery status by calling the function "batt"
+// Triggers a publish with the info (so subscribe or watch the dashboard)
+// and also returns a '1' if there's >10% battery left and a '0' if below
+int batteryStatus(String command){
+    // Publish the battery voltage and percentage of battery remaining
+    // if you want to be really efficient, just report one of these
+    // the String::format("%f.2") part gives us a string to publish,
+    // but with only 2 decimal points to save space
+    Particle.publish("BATT", batteryString(), 60, PRIVATE);
+    // if there's more than 10% of the battery left, then return 1
+    if(fuelGauge.getSoC()>=BATTERY_LOW_VALUE){ return 1;}
+    // if you're running out of battery, return 0
+    else { return 0;}
+}
+
+/**
+ * Create a JSON.parsable string representing the battery and power state.
+ * s represents the state of charge of the battery 0.0 to 100.0
+ * c represents whether the battery is charging (should be paired with power state)
+ * p represents whether the USB cable is plugged in
+ * So a couple of examples:
+ * {"s":79.44,"c": 0,"p": 0}
+ * {"s":81.24,"c": 1,"p": 1}
+ */
+String batteryString() {
+  return
+    "{\"s\":" + String::format("%.2f",fuelGauge.getSoC()) +
+    ",\"c\": " + powerCheck.getIsCharging() +
+    ",\"p\": " + powerCheck.getHasPower() +
+    "}";
+}
+
+/**
+ * Create a JSON.parsable string representing the GPS location.
+ * lat represents latitude
+ * lon represents the longitude
+ * So an example:
+ * {"lat":45.372843,"lon":-75.69791979.44}
+ */
+ String locationString() {
+     return
+       "{\"lat\":" + String::format("%f",gpsLocation.readLatDeg()) +
+       ",\"lon\":" + String::format("%f",gpsLocation.readLonDeg()) +
+       "}";
+ }
+
+// Send a message indicating starting up
+void sendConnectedMessage() {
+  Particle.publish("CONN", batteryString(), 60, PRIVATE);
+}
+
+Timer batteryLEDTimer(1000, setBatteryStatus);
+Timer cellularLEDTimer(1000, setCellularsStatus);
+Timer locationTimer(1000, setLocationStatus);
+Timer ledFadeTimer(10, setCurrentFadeValue);
 
 void setup() {
 	Serial.println("Setup");
@@ -68,14 +124,20 @@ void setup() {
 
 	// Enable the GPS module. Defaults to off to save power.
 	// Takes 1.5s or so because of delays.
-	gpsLocation.gpsOn();
 	batteryLEDTimer.start();
 	cellularLEDTimer.start();
 	locationTimer.start();
 	ledFadeTimer.start();
 
+  // Startup the GPS
+	gpsLocation.gpsOn();
+
+  // Connect to the Particle Cloud - nessesary when you use SYSTEM_MODE(SEMI_AUTOMATIC);
 	Particle.connect();
+
+  // Setup the remote APIs
   Particle.function("gps", gpsPublish);
+  Particle.function("batt", batteryStatus);
 }
 
 void setCurrentFadeValue() {
@@ -99,21 +161,32 @@ void setLEDBrightness(int ledPin, bool isSolid) {
 void loop() {
 	gpsLocation.updateGPS();
 
+  // Send the battery value when we connect, so we have the data
+  if (!CONNECTED_MESSAGE_SENT && Cellular.ready()) {
+    sendConnectedMessage();
+    CONNECTED_MESSAGE_SENT = true;
+  }
+
 	if (millis() - lastCheck > 2000) {
 		lastCheck = millis();
 		if (!LOCATION_SENT && gpsLocation.gpsFix()) {
 			// Important: You can only send the publish messages as part of something
 			// in or invocated from the loop()
-			Particle.publish("G", gpsLocation.readLatLon(), 60, PRIVATE);
+			Particle.publish("TAG", locationString(), 60, PRIVATE);
 			LOCATION_SENT = true;
+      LAST_REBROADCAST_TIME = millis();
 		}
 	}
+  if (LOCATION_SENT && (millis() - LAST_REBROADCAST_TIME > REBROADCAST_INTERVAL)) {
+    LAST_REBROADCAST_TIME = millis();
+    gpsPublish("");
+    batteryStatus("");
+  }
 }
 
 void setBatteryStatus() {
 	bool should_flash_led = true;
-	Serial.println("Charging? " + String::format("%d", powerCheck.getIsCharging()));
-	Serial.println("Battery Level: " + String::format("%.2f",fuelGauge.getSoC()) + "%");
+	Serial.println(batteryString());
 	if (powerCheck.getHasPower()) {
 		// On USB power
 		should_flash_led = powerCheck.getIsCharging();
@@ -129,9 +202,10 @@ void setBatteryStatus() {
 void setCellularsStatus() {
 	Serial.println("Cell Connecting? " + String::format("%d", Cellular.connecting()));
 	Serial.println("Cell Ready? " + String::format("%d", Cellular.ready()));
-	CELLULAR_LED_SOLID = !Cellular.connecting();
+	CELLULAR_LED_SOLID = Cellular.ready();
 }
 
+// Yes this seems redundant but may use these two separate state
 void setLocationStatus() {
-	bool LOCATION_LED_SOLID = !LOCATION_SENT;
+	LOCATION_LED_SOLID = LOCATION_SENT;
 }

@@ -6,7 +6,7 @@ const int BATTERY_LOW_VALUE = 40;
 bool CONNECTED_MESSAGE_SENT = false;
 
 // Rebroadcase every 30 minutes
-const int REBROADCAST_INTERVAL = 1800000;
+const int REBROADCAST_INTERVAL = 7200000;
 
 unsigned long LAST_REBROADCAST_TIME = 0;
 
@@ -25,10 +25,18 @@ int BATTERY_LED_SOLID = false;
 const int CELLULAR_LED_PIN = D1;
 int CELLULAR_LED_SOLID = false;
 
+// Location LED variables
 const int LOCATION_LED_PIN = D2;
 int LOCATION_LED_SOLID = false;
+
+// GPS variables around sending
 bool LOCATION_SENT = false;
-bool LOCATION_AVAILABLE = false;
+// When should the TAG be sent after getting a solid GPS signal
+// Adding this in because there were some 0's seen if calling
+// too quickly after getting a solid signal
+unsigned long SEND_TAG_TIME = -1;
+// Wait at least 5 seconds after getting a GPS signal
+const int SEND_TAG_GAP_TIME = 5000;
 
 unsigned long lastCheck = 0;
 char lastStatus[256];
@@ -107,9 +115,9 @@ void sendConnectedMessage() {
   Particle.publish("CONN", batteryString(), 60, PRIVATE);
 }
 
-Timer batteryLEDTimer(1000, setBatteryStatus);
-Timer cellularLEDTimer(1000, setCellularsStatus);
-Timer locationTimer(1000, setLocationStatus);
+Timer batteryLEDTimer(3000, setBatteryStatus);
+Timer cellularLEDTimer(3000, setCellularsStatus);
+Timer locationTimer(3000, setLocationStatus);
 Timer ledFadeTimer(10, setCurrentFadeValue);
 
 void setup() {
@@ -159,7 +167,8 @@ void setLEDBrightness(int ledPin, bool isSolid) {
 }
 
 void loop() {
-	gpsLocation.updateGPS();
+  unsigned long now = millis();
+  gpsLocation.updateGPS();
 
   // Send the battery value when we connect, so we have the data
   if (!CONNECTED_MESSAGE_SENT && Cellular.ready()) {
@@ -167,14 +176,21 @@ void loop() {
     CONNECTED_MESSAGE_SENT = true;
   }
 
-	if (millis() - lastCheck > 2000) {
-		lastCheck = millis();
-		if (!LOCATION_SENT && gpsLocation.gpsFix()) {
-			// Important: You can only send the publish messages as part of something
-			// in or invocated from the loop()
-			Particle.publish("TAG", locationString(), 60, PRIVATE);
-			LOCATION_SENT = true;
-      LAST_REBROADCAST_TIME = millis();
+	if (now - lastCheck > 2000) {
+		lastCheck = now;
+		if (!LOCATION_SENT) {
+      if (gpsLocation.gpsFix() && SEND_TAG_TIME == -1) {
+        SEND_TAG_TIME = now + SEND_TAG_GAP_TIME;
+        Serial.println("Setting the SEND_TAG_TIME");
+      }
+    }
+    if (!LOCATION_SENT && SEND_TAG_TIME != -1) {
+      if (now > SEND_TAG_TIME) {
+        Serial.println("Sending TAG " + locationString());
+  			Particle.publish("TAG", locationString(), 60, PRIVATE);
+  			LOCATION_SENT = true;
+        LAST_REBROADCAST_TIME = millis();
+      }
 		}
 	}
   if (LOCATION_SENT && (millis() - LAST_REBROADCAST_TIME > REBROADCAST_INTERVAL)) {

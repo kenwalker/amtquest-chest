@@ -22,11 +22,11 @@ const int BATTERY_LED_PIN = D0;
 int BATTERY_LED_SOLID = false;
 
 // Cellular LED variables
-const int CELLULAR_LED_PIN = D1;
+const int CELLULAR_LED_PIN = D2;
 int CELLULAR_LED_SOLID = false;
 
 // Location LED variables
-const int LOCATION_LED_PIN = D2;
+const int LOCATION_LED_PIN = D3;
 int LOCATION_LED_SOLID = false;
 
 // GPS variables around sending

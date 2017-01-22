@@ -5,7 +5,7 @@
 const int BATTERY_LOW_VALUE = 40;
 bool CONNECTED_MESSAGE_SENT = false;
 
-// Rebroadcase every 30 minutes
+// Rebroadcast every 120 minutes
 const int REBROADCAST_INTERVAL = 7200000;
 
 unsigned long LAST_REBROADCAST_TIME = 0;
@@ -37,6 +37,7 @@ bool LOCATION_SENT = false;
 unsigned long SEND_TAG_TIME = -1;
 // Wait at least 5 seconds after getting a GPS signal
 const int SEND_TAG_GAP_TIME = 5000;
+bool WAS_CHARGING = false;
 
 unsigned long lastCheck = 0;
 char lastStatus[256];
@@ -55,13 +56,15 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 // a GPS fix, otherwise returns '0'
 int gpsPublish(String command){
     if(gpsLocation.gpsFix()){
-        Particle.publish("GPS", locationString(), 60, PRIVATE);
+      Particle.publish("GPS", locationString(), 60, PRIVATE);
 
-        // uncomment next line if you want a manual publish to reset delay counter
-        // lastPublish = millis();
-        return 1;
+      // uncomment next line if you want a manual publish to reset delay counter
+      // lastPublish = millis();
+      return 1;
     }
-    else { return 0; }
+    else {
+      return 0;
+    }
 }
 
 // Lets you remotely check the battery status by calling the function "batt"
@@ -184,11 +187,20 @@ void loop() {
         Serial.println("Setting the SEND_TAG_TIME");
       }
     }
-    if (!LOCATION_SENT && SEND_TAG_TIME != -1) {
+    if (CONNECTED_MESSAGE_SENT && !LOCATION_SENT && SEND_TAG_TIME != -1) {
       if (now > SEND_TAG_TIME) {
-        Serial.println("Sending TAG " + locationString());
-  			Particle.publish("TAG", locationString(), 60, PRIVATE);
-  			LOCATION_SENT = true;
+        // Do NOT send the GPS fix if the Chest is plugged in
+        if (WAS_CHARGING || powerCheck.getHasPower()) {
+          // Do NOT send the GPS fix if the Chest is plugged in
+          // This is both likely that someone is charging it at their house which is not an event or park
+          // and to prevent random locations of the custodians of the AmtQuest chest from being tagged.
+          Serial.println("Not sending TAG due to power");
+          WAS_CHARGING = true;
+        } else {
+          Serial.println("Sending TAG " + locationString());
+          Particle.publish("TAG", locationString(), 60, PRIVATE);
+          LOCATION_SENT = true;
+        }
         LAST_REBROADCAST_TIME = millis();
       }
 		}
